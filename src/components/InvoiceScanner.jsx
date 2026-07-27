@@ -1,14 +1,24 @@
 import { useState } from 'react'
-import { invoices as initialInvoices, formatCurrency } from '../data'
+import { demoInvoices, formatCurrency } from '../data'
 import StatusPill from './StatusPill'
 import SummaryBar from './SummaryBar'
 import InvoiceDetail from './InvoiceDetail'
 
-export default function InvoiceScanner({ showToast }) {
-  const [invoices, setInvoices] = useState(initialInvoices)
+export default function InvoiceScanner({ showToast, entryMode }) {
+  const [invoices, setInvoices] = useState(entryMode === 'demo' ? demoInvoices : [])
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [scanningAll, setScanningAll] = useState(false)
+  const [showForm, setShowForm] = useState(entryMode === 'scan')
+  const [scanning, setScanning] = useState(false)
+
+  // Form state
+  const [form, setForm] = useState({
+    vendorName: '',
+    amount: '',
+    hsnCode: '',
+    gstRate: '18',
+    vendorFilingStatus: 'Regular',
+  })
 
   const selected = invoices.find((i) => i.id === selectedId)
   const analyzedCount = invoices.filter((i) => i.status === 'analyzed').length
@@ -18,49 +28,96 @@ export default function InvoiceScanner({ showToast }) {
     .reduce((s, i) => s + i.amount * (i.gstRate / 100), 0)
 
   const summaryItems = [
-    { label: 'Analyzed', value: `${analyzedCount} / ${invoices.length}`, accent: 'blue', icon: 'analyzed' },
+    { label: 'Analyzed', value: analyzedCount, accent: 'blue', icon: 'analyzed' },
     { label: 'Issues found', value: issuesFound, accent: 'amber', icon: 'issues' },
     { label: 'ITC at risk', value: itcAtRisk > 0 ? formatCurrency(itcAtRisk) : '₹0', accent: 'red', icon: 'risk' },
   ]
 
-  async function analyzeOne(id) {
-    const inv = invoices.find((i) => i.id === id)
-    if (inv.analysis) return true
+  function updateForm(key, value) {
+    setForm((p) => ({ ...p, [key]: value }))
+  }
+
+  async function handleScan(e) {
+    e.preventDefault()
+    if (!form.vendorName || !form.amount || !form.hsnCode) return
+
+    setScanning(true)
+
+    const invoiceId = `INV-${Date.now().toString().slice(-6)}`
+    const amount = parseInt(form.amount.replace(/,/g, ''))
+    const gstRate = parseInt(form.gstRate)
+
+    const newInvoice = {
+      id: invoiceId,
+      vendorName: form.vendorName,
+      amount: amount,
+      hsnCode: form.hsnCode,
+      gstRate: gstRate,
+      date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+      vendorFilingStatus: form.vendorFilingStatus,
+      status: 'pending',
+      isDemo: false,
+      analysis: null,
+    }
+
+    // Add to list immediately with pending status
+    setInvoices((p) => [newInvoice, ...p])
+    setSelectedId(invoiceId)
+    setLoading(true)
+
+    let analysis = null
+
     try {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 12000)
+
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'invoice', data: { invoiceNumber: inv.id, vendorName: inv.vendorName, amount: inv.amount, hsnCode: inv.hsnCode, gstRate: inv.gstRate, date: inv.date, vendorFilingStatus: inv.vendorFilingStatus } }),
+        body: JSON.stringify({
+          type: 'invoice',
+          data: {
+            invoiceNumber: invoiceId,
+            vendorName: form.vendorName,
+            amount: amount,
+            hsnCode: form.hsnCode,
+            gstRate: gstRate,
+            date: newInvoice.date,
+            vendorFilingStatus: form.vendorFilingStatus,
+          },
+        }),
+        signal: controller.signal,
       })
-      if (!res.ok) throw new Error()
-      const analysis = await res.json()
-      setInvoices((p) => p.map((i) => (i.id === id ? { ...i, analysis, status: 'analyzed' } : i)))
-      return true
-    } catch { return false }
-  }
 
-  async function handleSelect(id) {
-    setSelectedId(id)
-    const inv = invoices.find((i) => i.id === id)
-    if (inv.analysis) return
-    setLoading(true)
-    const ok = await analyzeOne(id)
-    if (!ok) showToast('Analysis unavailable — try again', 'error')
-    setLoading(false)
-  }
+      clearTimeout(timeout)
 
-  async function handleScanAll() {
-    setScanningAll(true)
-    const pending = invoices.filter((i) => i.status !== 'analyzed')
-    let failed = 0
-    for (const inv of pending) {
-      const ok = await analyzeOne(inv.id)
-      if (!ok) failed++
-      await new Promise((r) => setTimeout(r, 3000))
+      if (res.ok) {
+        const data = await res.json()
+        if (data && data.complianceScore !== undefined) {
+          analysis = data
+        }
+      }
+    } catch {
+      // Will show error
     }
-    setScanningAll(false)
-    if (failed) showToast(`${pending.length - failed} done, ${failed} failed`, 'error')
-    else showToast(`All ${pending.length} invoices analyzed`)
+
+    if (analysis) {
+      setInvoices((p) => p.map((i) => (i.id === invoiceId ? { ...i, analysis, status: 'analyzed' } : i)))
+      showToast('Invoice analyzed successfully')
+    } else {
+      showToast('Analysis failed — check your connection and try again', 'error')
+      // Remove the failed invoice
+      setInvoices((p) => p.filter((i) => i.id !== invoiceId))
+      setSelectedId(null)
+    }
+
+    setLoading(false)
+    setScanning(false)
+    setForm({ vendorName: '', amount: '', hsnCode: '', gstRate: '18', vendorFilingStatus: 'Regular' })
+  }
+
+  function handleSelect(id) {
+    setSelectedId(id)
   }
 
   function handleApplyFix(id) {
@@ -68,90 +125,186 @@ export default function InvoiceScanner({ showToast }) {
     setInvoices((p) => p.map((i) => i.id === id && i.analysis ? { ...i, analysis: { ...i.analysis, complianceScore: 100 } } : i))
   }
 
-  const pendingCount = invoices.filter((i) => i.status !== 'analyzed').length
-
   return (
     <div className="pt-6">
       <SummaryBar items={summaryItems} />
 
-      {/* Banner */}
-      <div className="card px-5 py-4 mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent/8 flex items-center justify-center shrink-0 text-accent">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4H14M2 8H14M2 12H8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/></svg>
-          </div>
-          <div>
-            <p className="text-[13px] font-medium text-text">
-              {pendingCount > 0 ? `${pendingCount} invoice${pendingCount > 1 ? 's' : ''} from Mar–Apr 2025 pending review` : 'All invoices analyzed'}
-            </p>
-            <p className="text-[11px] text-muted mt-0.5">Source: GSTR-1 & Purchase Register</p>
-          </div>
-        </div>
-        {pendingCount > 0 && (
-          <button onClick={handleScanAll} disabled={scanningAll}
-            className="shrink-0 flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 disabled:opacity-30 bg-gradient-to-r from-accent to-accent-light text-white hover:shadow-lg hover:shadow-accent/20">
-            {scanningAll ? (<><div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />Scanning...</>) : 'Analyze All'}
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-col lg:flex-row gap-4">
-        {/* Table */}
-        <div className={`w-full ${selectedId ? 'lg:w-[56%]' : ''} transition-all duration-300`}>
-          <div className="card overflow-hidden">
-            <div className="hidden sm:grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-white/[0.04]">
-              <span className="label">Invoice / vendor</span>
-              <span className="label text-right w-24">Amount</span>
-              <span className="label text-right w-20">HSN / GST</span>
-              <span className="label text-right w-24">Status</span>
+      {/* Scan Form */}
+      <div className="card mb-4 overflow-hidden">
+        <button
+          onClick={() => setShowForm(!showForm)}
+          className="w-full px-5 py-4 flex items-center justify-between hover:bg-white/[0.01] transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-accent to-accent-light flex items-center justify-center shrink-0">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <path d="M8 3V13M3 8H13" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
             </div>
+            <div className="text-left">
+              <p className="text-[13px] font-semibold text-text">Scan a new invoice</p>
+              <p className="text-[11px] text-muted mt-0.5">Enter invoice details for instant AI compliance analysis</p>
+            </div>
+          </div>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"
+            className={`text-muted transition-transform duration-300 ${showForm ? 'rotate-180' : ''}`}>
+            <path d="M4 6L8 10L12 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        </button>
 
-            {invoices.map((inv, idx) => {
-              const score = inv.analysis?.complianceScore
-              const isActive = selectedId === inv.id
-              const scoreColor = score >= 71 ? 'bg-success/10 text-success border-success/20' : score >= 41 ? 'bg-warning/10 text-warning border-warning/20' : 'bg-danger/10 text-danger border-danger/20'
-
-              return (
-                <button key={inv.id} onClick={() => handleSelect(inv.id)}
-                  className={`w-full text-left px-5 py-3.5 flex flex-col sm:grid sm:grid-cols-[1fr_auto_auto_auto] sm:items-center gap-2 sm:gap-4 transition-all duration-200 border-b border-white/[0.03] last:border-0 ${isActive ? 'bg-accent/[0.05] border-l-2 !border-l-accent' : 'hover:bg-white/[0.02]'}`}>
-                  <div className="flex items-center gap-3">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 border ${inv.status === 'analyzed' ? scoreColor : 'bg-white/[0.02] text-muted border-white/[0.06]'}`}>
-                      {inv.status === 'analyzed' ? score : idx + 1}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-[13px] font-medium text-text truncate">{inv.vendorName}</p>
-                      <p className="text-[11px] text-muted mt-0.5">{inv.id} · {inv.date}</p>
-                    </div>
-                  </div>
-                  <p className="text-[13px] font-semibold text-text sm:text-right w-24">{formatCurrency(inv.amount)}</p>
-                  <p className="text-[11px] text-muted-light sm:text-right w-20">{inv.hsnCode} · {inv.gstRate}%</p>
-                  <div className="sm:flex sm:justify-end w-24"><StatusPill label={inv.status === 'analyzed' ? 'Analyzed' : 'Pending Review'} /></div>
+        {showForm && (
+          <form onSubmit={handleScan} className="px-5 pb-5 pt-1 border-t border-white/[0.04] animate-[fadeIn_0.2s_ease-out]">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+              <div>
+                <label className="label block mb-1.5">Vendor name</label>
+                <input
+                  type="text"
+                  value={form.vendorName}
+                  onChange={(e) => updateForm('vendorName', e.target.value)}
+                  placeholder="e.g. Tata Steel Ltd"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
+                />
+              </div>
+              <div>
+                <label className="label block mb-1.5">Invoice amount (₹)</label>
+                <input
+                  type="text"
+                  value={form.amount}
+                  onChange={(e) => updateForm('amount', e.target.value.replace(/[^0-9,]/g, ''))}
+                  placeholder="e.g. 1,50,000"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm font-mono focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
+                />
+              </div>
+              <div>
+                <label className="label block mb-1.5">HSN / SAC code</label>
+                <input
+                  type="text"
+                  value={form.hsnCode}
+                  onChange={(e) => updateForm('hsnCode', e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="e.g. 8471"
+                  maxLength={8}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm font-mono focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
+                />
+              </div>
+              <div>
+                <label className="label block mb-1.5">GST rate applied (%)</label>
+                <select
+                  value={form.gstRate}
+                  onChange={(e) => updateForm('gstRate', e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all appearance-none"
+                >
+                  <option value="0" className="bg-surface">0%</option>
+                  <option value="5" className="bg-surface">5%</option>
+                  <option value="12" className="bg-surface">12%</option>
+                  <option value="18" className="bg-surface">18%</option>
+                  <option value="28" className="bg-surface">28%</option>
+                </select>
+              </div>
+              <div>
+                <label className="label block mb-1.5">Vendor filing status</label>
+                <select
+                  value={form.vendorFilingStatus}
+                  onChange={(e) => updateForm('vendorFilingStatus', e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all appearance-none"
+                >
+                  <option value="Regular" className="bg-surface">Regular</option>
+                  <option value="Irregular" className="bg-surface">Irregular</option>
+                  <option value="Defaulter" className="bg-surface">Defaulter</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button
+                  type="submit"
+                  disabled={!form.vendorName || !form.amount || !form.hsnCode || scanning}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-accent to-accent-light text-white hover:shadow-lg hover:shadow-accent/20"
+                >
+                  {scanning ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Analyzing...
+                    </span>
+                  ) : 'Analyze'}
                 </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Desktop detail */}
-        {selectedId && (
-          <div className="hidden lg:block w-[44%] animate-[fadeSlideIn_0.3s_ease-out]">
-            <div className="sticky top-[76px]">
-              <InvoiceDetail invoice={selected} loading={loading} onApplyFix={() => handleApplyFix(selectedId)} onClose={() => setSelectedId(null)} />
+              </div>
             </div>
-          </div>
-        )}
-
-        {/* Mobile sheet */}
-        {selectedId && (
-          <div className="lg:hidden fixed inset-0 z-50 flex flex-col animate-[fadeIn_0.2s]">
-            <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedId(null)} />
-            <div className="bg-base-light border-t border-white/[0.08] rounded-t-2xl max-h-[85vh] overflow-y-auto animate-[slideUp_0.3s_ease-out]">
-              <div className="flex justify-center pt-3 pb-2"><div className="w-10 h-1 rounded-full bg-white/10" /></div>
-              <InvoiceDetail invoice={selected} loading={loading} onApplyFix={() => handleApplyFix(selectedId)} onClose={() => setSelectedId(null)} />
-            </div>
-          </div>
+          </form>
         )}
       </div>
+
+      {/* Invoice list */}
+      {invoices.length > 0 && (
+        <div className="flex flex-col lg:flex-row gap-4">
+          <div className={`w-full ${selectedId ? 'lg:w-[56%]' : ''} transition-all duration-300`}>
+            <div className="card overflow-hidden">
+              <div className="hidden sm:grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3 border-b border-white/[0.04]">
+                <span className="label">Invoice / vendor</span>
+                <span className="label text-right w-24">Amount</span>
+                <span className="label text-right w-20">HSN / GST</span>
+                <span className="label text-right w-24">Status</span>
+              </div>
+
+              {invoices.map((inv, idx) => {
+                const score = inv.analysis?.complianceScore
+                const isActive = selectedId === inv.id
+                const scoreColor = score >= 71 ? 'bg-success/10 text-success border-success/20' : score >= 41 ? 'bg-warning/10 text-warning border-warning/20' : 'bg-danger/10 text-danger border-danger/20'
+
+                return (
+                  <button key={inv.id} onClick={() => handleSelect(inv.id)}
+                    className={`w-full text-left px-5 py-3.5 flex flex-col sm:grid sm:grid-cols-[1fr_auto_auto_auto] sm:items-center gap-2 sm:gap-4 transition-all duration-200 border-b border-white/[0.03] last:border-0 ${isActive ? 'bg-accent/[0.05] border-l-2 !border-l-accent' : 'hover:bg-white/[0.02]'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 border ${inv.status === 'analyzed' ? scoreColor : 'bg-white/[0.02] text-muted border-white/[0.06]'}`}>
+                        {inv.status === 'analyzed' ? score : idx + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="text-[13px] font-medium text-text truncate">{inv.vendorName}</p>
+                          {inv.isDemo && <span className="text-[9px] font-medium text-muted bg-white/[0.04] px-1.5 py-0.5 rounded">SAMPLE</span>}
+                        </div>
+                        <p className="text-[11px] text-muted mt-0.5">{inv.id} · {inv.date}</p>
+                      </div>
+                    </div>
+                    <p className="text-[13px] font-semibold text-text sm:text-right w-24">{formatCurrency(inv.amount)}</p>
+                    <p className="text-[11px] text-muted-light sm:text-right w-20">{inv.hsnCode} · {inv.gstRate}%</p>
+                    <div className="sm:flex sm:justify-end w-24"><StatusPill label={inv.status === 'analyzed' ? 'Analyzed' : 'Pending Review'} /></div>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {selectedId && (
+            <div className="hidden lg:block w-[44%] animate-[fadeSlideIn_0.3s_ease-out]">
+              <div className="sticky top-[76px]">
+                <InvoiceDetail invoice={selected} loading={loading} onApplyFix={() => handleApplyFix(selectedId)} onClose={() => setSelectedId(null)} />
+              </div>
+            </div>
+          )}
+
+          {selectedId && (
+            <div className="lg:hidden fixed inset-0 z-50 flex flex-col animate-[fadeIn_0.2s]">
+              <div className="flex-1 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedId(null)} />
+              <div className="bg-base-light border-t border-white/[0.08] rounded-t-2xl max-h-[85vh] overflow-y-auto animate-[slideUp_0.3s_ease-out]">
+                <div className="flex justify-center pt-3 pb-2"><div className="w-10 h-1 rounded-full bg-white/10" /></div>
+                <InvoiceDetail invoice={selected} loading={loading} onApplyFix={() => handleApplyFix(selectedId)} onClose={() => setSelectedId(null)} />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Empty state when no invoices */}
+      {invoices.length === 0 && !showForm && (
+        <div className="card px-8 py-16 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+              <rect x="3" y="2" width="18" height="20" rx="3" stroke="#6366F1" strokeWidth="1.5"/>
+              <path d="M8 8H16M8 12H14M8 16H10" stroke="#6366F1" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-text mb-1">No invoices scanned yet</p>
+          <p className="text-xs text-muted">Use the form above to scan your first invoice</p>
+        </div>
+      )}
     </div>
   )
 }

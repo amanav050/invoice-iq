@@ -1,58 +1,57 @@
-export const invoices = [
+export const demoInvoices = [
   {
-    id: 'INV-2024-001',
+    id: 'DEMO-001',
     vendorName: 'Sai Steel Traders',
     amount: 472000,
     hsnCode: '7209',
     gstRate: 18,
     date: '15-Mar-2025',
     vendorFilingStatus: 'Irregular',
-    status: 'pending',
-    analysis: null,
+    status: 'analyzed',
+    isDemo: true,
+    analysis: {
+      complianceScore: 38,
+      hsnValidation: { current: '7209', correct: '7210', isValid: false, reason: 'HSN 7209 covers cold-rolled flat products in coils. Invoice describes cut-to-length sheets, classified under HSN 7210 (flat-rolled products, not in coils). Mismatch will trigger scrutiny during GSTR-2B reconciliation.' },
+      itcEligibility: { status: 'at-risk', reason: 'Vendor has irregular filing pattern — missed 3 of last 6 GSTR-1 filings. ITC may be reversed under Section 16(2)(c) if vendor fails to deposit collected tax.' },
+      taxRateCheck: { applied: 18, correct: 18, isValid: true },
+      recommendation: 'Correct HSN from 7209 to 7210 before GSTR-1 filing. Monitor vendor compliance — request GSTR-3B acknowledgment before future payments.',
+    },
   },
   {
-    id: 'INV-2024-002',
+    id: 'DEMO-002',
     vendorName: 'Bharat Polymers Ltd',
     amount: 185000,
     hsnCode: '3917',
     gstRate: 18,
     date: '22-Mar-2025',
     vendorFilingStatus: 'Regular',
-    status: 'pending',
-    analysis: null,
+    status: 'analyzed',
+    isDemo: true,
+    analysis: {
+      complianceScore: 94,
+      hsnValidation: { current: '3917', correct: '3917', isValid: true, reason: 'HSN 3917 correctly covers tubes, pipes and hoses of plastics. Classification aligns with polymer conduit pipes described in invoice.' },
+      itcEligibility: { status: 'eligible', reason: 'Vendor has clean filing record with regular GSTR-1 submissions. All conditions under Section 16(2) satisfied for full ITC claim.' },
+      taxRateCheck: { applied: 18, correct: 18, isValid: true },
+      recommendation: 'Invoice is fully compliant. No action required. Continue monitoring vendor filing status.',
+    },
   },
   {
-    id: 'INV-2024-003',
-    vendorName: 'Gupta Electrical Supply',
-    amount: 630000,
-    hsnCode: '8538',
-    gstRate: 18,
-    date: '01-Apr-2025',
-    vendorFilingStatus: 'Irregular',
-    status: 'pending',
-    analysis: null,
-  },
-  {
-    id: 'INV-2024-004',
+    id: 'DEMO-003',
     vendorName: 'Laxmi Packaging House',
     amount: 92000,
     hsnCode: '4819',
     gstRate: 12,
     date: '10-Apr-2025',
     vendorFilingStatus: 'Regular',
-    status: 'pending',
-    analysis: null,
-  },
-  {
-    id: 'INV-2024-005',
-    vendorName: 'Om Logistics Partner',
-    amount: 315000,
-    hsnCode: '9965',
-    gstRate: 18,
-    date: '18-Apr-2025',
-    vendorFilingStatus: 'Defaulter',
-    status: 'pending',
-    analysis: null,
+    status: 'analyzed',
+    isDemo: true,
+    analysis: {
+      complianceScore: 52,
+      hsnValidation: { current: '4819', correct: '4819', isValid: true, reason: 'HSN 4819 correctly covers cartons, boxes and cases of paper/paperboard.' },
+      itcEligibility: { status: 'at-risk', reason: 'Applied GST rate of 12% is incorrect for this HSN. ITC claimed at wrong rate may face partial reversal during assessment.' },
+      taxRateCheck: { applied: 12, correct: 18, isValid: false },
+      recommendation: 'Critical: GST rate is 12% but correct rate for HSN 4819 is 18%. Request supplementary invoice from vendor for differential 6% GST (₹5,520). Do not claim ITC until corrected.',
+    },
   },
 ];
 
@@ -102,6 +101,37 @@ export const vendors = [
     analysis: null,
   },
 ];
+
+export const vendorFallbacks = {
+  V001: {
+    riskNarrative: 'Sai Steel Traders presents significant compliance risk due to persistent irregularities in GST return filings. The vendor has missed 3 out of the last 6 GSTR-1 filing deadlines, indicating systemic non-compliance that directly impacts your ITC claims.',
+    filingPattern: 'Missed GSTR-1 in Oct 2024, Dec 2024, Feb 2025. Filed late in Nov 2024. Only 2 of last 6 filings on time.',
+    itcExposure: '₹10,18,800',
+    prediction: 'High probability of continued non-compliance. 75% likelihood of 2+ missed filings next quarter, potentially triggering automatic ITC reversal.',
+    recommendation: 'Reduce transaction volume by 50%. Require GSTR-3B acknowledgment before payments exceeding ₹1,00,000. Identify alternative steel supplier with Regular status.',
+  },
+  V002: {
+    riskNarrative: 'Bharat Polymers Ltd is a low-risk vendor with exemplary GST compliance. Consistent and timely filing record across all 28 invoices. No discrepancies detected in HSN classifications or tax rates.',
+    filingPattern: 'All GSTR-1 and GSTR-3B returns filed on or before due dates for 12 consecutive months. Zero late filings.',
+    itcExposure: '₹0',
+    prediction: 'Minimal risk. Strong financial governance and systematic compliance processes indicate sustained reliability.',
+    recommendation: 'Maintain current transaction levels. Consider for preferred vendor status. Standard quarterly monitoring sufficient.',
+  },
+  V003: {
+    riskNarrative: 'Gupta Electrical Supply shows moderate compliance risk with emerging late filing pattern. Filed late in 2 of last 4 months, suggesting developing operational strain that could escalate.',
+    filingPattern: 'GSTR-1 filed 12 days late in Jan 2025 and 8 days late in Mar 2025. On-time in Feb and Apr 2025.',
+    itcExposure: '₹3,60,000',
+    prediction: 'Moderate escalation probability. May transition to Irregular status within 2-3 months if pattern continues.',
+    recommendation: 'Place on watchlist with monthly reviews. Request filed GSTR-1 copies before processing invoices over ₹2,00,000. Establish backup supplier.',
+  },
+  V004: {
+    riskNarrative: 'Om Logistics Partner represents critical risk and immediate threat to ITC claims. No GSTR-1 filed since January 2025 — a 6-month default. GSTIN likely flagged by GST department. ITC against their invoices faces near-certain reversal.',
+    filingPattern: 'Last GSTR-1 filed January 2025. No filings for Feb–Jun 2025. GSTIN at risk of suo moto cancellation.',
+    itcExposure: '₹5,67,000',
+    prediction: 'Near-certain ITC denial for all pending invoices. Historical ITC claims from past 12 months may also face review.',
+    recommendation: 'Immediately cease all transactions. File proactive ITC reversal to avoid interest and penalty. Source alternative logistics partner with Regular status.',
+  },
+};
 
 export function formatCurrency(num) {
   return new Intl.NumberFormat('en-IN', {
