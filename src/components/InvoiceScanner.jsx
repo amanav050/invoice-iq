@@ -56,7 +56,7 @@ export default function InvoiceScanner({ showToast }) {
     for (const inv of pending) {
       const ok = await analyzeOne(inv.id)
       if (!ok) failed++
-      await new Promise((r) => setTimeout(r, 800))
+      await new Promise((r) => setTimeout(r, 3000))
     }
     setScanningAll(false)
     if (failed) showToast(`${pending.length - failed} done, ${failed} failed`, 'error')

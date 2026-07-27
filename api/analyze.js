@@ -9,7 +9,6 @@ export default async function handler(req, res) {
   }
 
   const { type, data } = req.body;
-
   if (!type || !data) {
     return res.status(400).json({ error: 'Missing type or data' });
   }
@@ -22,7 +21,7 @@ export default async function handler(req, res) {
   if (type === 'invoice') {
     userPrompt = `Analyze this Indian GST invoice for compliance issues.
 Invoice: ${data.invoiceNumber}, Vendor: ${data.vendorName}, Amount: ₹${data.amount}, HSN: ${data.hsnCode}, GST Rate: ${data.gstRate}%, Date: ${data.date}, Vendor Filing Status: ${data.vendorFilingStatus || 'Unknown'}
-Return JSON with keys: complianceScore (0-100), hsnValidation {current, correct, isValid, reason}, itcEligibility {status (eligible|at-risk|blocked), reason}, taxRateCheck {applied, correct, isValid}, recommendation (1-2 lines)`;
+Return JSON with keys: complianceScore (0-100 integer), hsnValidation {current, correct, isValid (boolean), reason}, itcEligibility {status ("eligible" or "at-risk" or "blocked"), reason}, taxRateCheck {applied (number), correct (number), isValid (boolean)}, recommendation (1-2 lines)`;
     maxTokens = 512;
   } else if (type === 'vendor') {
     userPrompt = `Assess risk for this Indian GST vendor.
@@ -33,44 +32,70 @@ Return JSON with keys: riskNarrative (2-3 lines), filingPattern (1 line), itcExp
     return res.status(400).json({ error: 'Invalid type' });
   }
 
-  try {
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-20b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        max_tokens: maxTokens,
-        temperature: 0.3,
-      }),
-    });
+  // Retry logic for rate limits
+  const maxRetries = 3;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'openai/gpt-oss-20b',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          max_tokens: maxTokens,
+          temperature: 0.3,
+        }),
+      });
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Groq API error:', response.status, errText);
-      return res.status(502).json({ error: 'AI service unavailable' });
+      // Rate limited — wait and retry
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('retry-after');
+        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : attempt * 3000;
+        console.log(`Rate limited (attempt ${attempt}), waiting ${waitMs}ms`);
+        if (attempt < maxRetries) {
+          await new Promise((r) => setTimeout(r, waitMs));
+          continue;
+        }
+        return res.status(429).json({ error: 'Rate limited — please wait a moment and retry' });
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`Groq API error (${response.status}):`, errText);
+        return res.status(502).json({ error: 'AI service unavailable' });
+      }
+
+      const result = await response.json();
+      const content = result.choices?.[0]?.message?.content;
+
+      if (!content) {
+        console.error('Empty response from Groq:', JSON.stringify(result));
+        return res.status(502).json({ error: 'Empty AI response' });
+      }
+
+      // Strip markdown fences if present
+      const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+
+      try {
+        const parsed = JSON.parse(cleaned);
+        return res.status(200).json(parsed);
+      } catch (parseErr) {
+        console.error('JSON parse failed:', cleaned);
+        return res.status(502).json({ error: 'Invalid AI response format' });
+      }
+
+    } catch (err) {
+      console.error(`Network error (attempt ${attempt}):`, err.message);
+      if (attempt === maxRetries) {
+        return res.status(500).json({ error: 'Analysis failed — network error' });
+      }
+      await new Promise((r) => setTimeout(r, attempt * 2000));
     }
-
-    const result = await response.json();
-    const content = result.choices?.[0]?.message?.content;
-
-    if (!content) {
-      return res.status(502).json({ error: 'Empty AI response' });
-    }
-
-    // Strip any accidental markdown fences
-    const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-
-    const parsed = JSON.parse(cleaned);
-    return res.status(200).json(parsed);
-  } catch (err) {
-    console.error('Analysis error:', err.message);
-    return res.status(500).json({ error: 'Analysis failed' });
   }
 }
