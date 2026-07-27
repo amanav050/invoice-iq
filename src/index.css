@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-base text-text font-sans antialiased;
+    margin: 0;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1F2544 transparent;
+  }
+}
+
+@layer utilities {
+  .card {
+    @apply bg-surface border border-border rounded-2xl;
+  }
+
+  .card-hover {
+    @apply card transition-all duration-200;
+  }
+
+  .card-hover:hover {
+    @apply border-border-light bg-surface-2;
+  }
+
+  .card-inner {
+    @apply bg-surface-2 border border-border rounded-xl;
+  }
+
+  .label {
+    @apply text-[11px] font-medium uppercase tracking-[0.08em] text-muted;
+  }
+
+  .stat-value {
+    @apply text-2xl font-semibold text-text tracking-tight;
+  }
+}
+
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
