@@ -22,16 +22,15 @@ export default function VendorRadar({ showToast }) {
 
   async function handleSelect(id) {
     setSelectedId(id)
-    const v = vendors.find((v) => v.id === id)
+    const v = vendors.find((x) => x.id === id)
     if (v.analysis) return
 
     setLoading(true)
-
     let analysis = null
 
     try {
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 8000)
+      const timeout = setTimeout(() => controller.abort(), 10000)
 
       const res = await fetch('/api/analyze', {
         method: 'POST',
@@ -44,16 +43,12 @@ export default function VendorRadar({ showToast }) {
 
       if (res.ok) {
         const data = await res.json()
-        if (data && data.riskNarrative) {
-          analysis = data
-        }
+        if (data && data.riskNarrative) analysis = data
       }
-    } catch {
-      // Silent fail — fallback handles it
-    }
+    } catch {}
 
     if (!analysis) {
-      await new Promise((r) => setTimeout(r, 1500))
+      await new Promise((r) => setTimeout(r, 1200))
       analysis = vendorFallbacks[id] || vendorFallbacks['V002']
     }
 
@@ -64,16 +59,6 @@ export default function VendorRadar({ showToast }) {
   return (
     <div className="pt-6">
       <SummaryBar items={summaryItems} />
-
-      <div className="card px-5 py-4 mb-4 flex items-center gap-3">
-        <div className="w-9 h-9 rounded-xl bg-accent/8 flex items-center justify-center shrink-0 text-accent">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="8" cy="8" r="2.5" stroke="currentColor" strokeWidth="1.3"/><circle cx="8" cy="8" r="0.8" fill="currentColor"/></svg>
-        </div>
-        <div>
-          <p className="text-[13px] font-medium text-text">Vendor compliance monitoring</p>
-          <p className="text-[11px] text-muted mt-0.5">Based on GSTN filing data · Click a vendor for AI risk assessment</p>
-        </div>
-      </div>
 
       <div className="flex flex-col lg:flex-row gap-4">
         <div className={`w-full ${selectedId ? 'lg:w-[56%]' : ''} transition-all duration-300`}>

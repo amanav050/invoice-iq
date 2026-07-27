@@ -161,7 +161,7 @@ export default function InvoiceScanner({ showToast, entryMode }) {
                   type="text"
                   value={form.vendorName}
                   onChange={(e) => updateForm('vendorName', e.target.value)}
-                  placeholder="e.g. Tata Steel Ltd"
+                  placeholder="Vendor name"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
                 />
               </div>
@@ -171,7 +171,7 @@ export default function InvoiceScanner({ showToast, entryMode }) {
                   type="text"
                   value={form.amount}
                   onChange={(e) => updateForm('amount', e.target.value.replace(/[^0-9,]/g, ''))}
-                  placeholder="e.g. 1,50,000"
+                  placeholder="Amount in ₹"
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm font-mono focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
                 />
               </div>
@@ -181,7 +181,7 @@ export default function InvoiceScanner({ showToast, entryMode }) {
                   type="text"
                   value={form.hsnCode}
                   onChange={(e) => updateForm('hsnCode', e.target.value.replace(/[^0-9]/g, ''))}
-                  placeholder="e.g. 8471"
+                  placeholder="4-8 digit code"
                   maxLength={8}
                   className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm font-mono focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all"
                 />

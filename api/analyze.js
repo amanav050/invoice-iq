@@ -13,27 +13,21 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing type or data' });
   }
 
-  const systemPrompt = 'You are a GST compliance AI for Indian businesses. Respond ONLY in valid JSON. No markdown. No explanation outside JSON. No code fences.';
+  const systemPrompt = 'You are a GST compliance AI. Return ONLY valid JSON. No markdown. No code fences. Keep all string values under 120 characters.';
 
   let userPrompt;
-  let maxTokens;
 
   if (type === 'invoice') {
-    userPrompt = `Analyze this Indian GST invoice for compliance issues.
-Invoice: ${data.invoiceNumber}, Vendor: ${data.vendorName}, Amount: ₹${data.amount}, HSN: ${data.hsnCode}, GST Rate: ${data.gstRate}%, Date: ${data.date}, Vendor Filing Status: ${data.vendorFilingStatus || 'Unknown'}
-Return JSON with keys: complianceScore (0-100 integer), hsnValidation {current, correct, isValid (boolean), reason}, itcEligibility {status ("eligible" or "at-risk" or "blocked"), reason}, taxRateCheck {applied (number), correct (number), isValid (boolean)}, recommendation (1-2 lines)`;
-    maxTokens = 512;
+    userPrompt = `Check this GST invoice. Invoice:${data.invoiceNumber} Vendor:${data.vendorName} Amt:${data.amount} HSN:${data.hsnCode} Rate:${data.gstRate}% VendorStatus:${data.vendorFilingStatus}
+JSON keys: complianceScore(0-100), hsnValidation{current,correct,isValid,reason}, itcEligibility{status("eligible"/"at-risk"/"blocked"),reason}, taxRateCheck{applied,correct,isValid}, recommendation`;
   } else if (type === 'vendor') {
-    userPrompt = `Assess risk for this Indian GST vendor.
-Vendor: ${data.name}, GSTIN: ${data.gstin}, Reliability: ${data.reliability}/100, Filing Status: ${data.filingStatus}, Invoices: ${data.invoiceCount}, Known Risk: ${data.riskNote}
-Return JSON with keys: riskNarrative (2-3 lines), filingPattern (1 line), itcExposure (amount string in ₹), prediction (1 line), recommendation (1-2 lines)`;
-    maxTokens = 384;
+    userPrompt = `Assess GST vendor risk. Name:${data.name} GSTIN:${data.gstin} Reliability:${data.reliability}/100 Filing:${data.filingStatus} Invoices:${data.invoiceCount} Risk:${data.riskNote}
+JSON keys: riskNarrative, filingPattern, itcExposure(₹ string), prediction, recommendation`;
   } else {
     return res.status(400).json({ error: 'Invalid type' });
   }
 
-  // Retry logic for rate limits
-  const maxRetries = 3;
+  const maxRetries = 2;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -48,54 +42,83 @@ Return JSON with keys: riskNarrative (2-3 lines), filingPattern (1 line), itcExp
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          max_tokens: maxTokens,
-          temperature: 0.3,
+          max_tokens: 1024,
+          temperature: 0.2,
         }),
       });
 
-      // Rate limited — wait and retry
       if (response.status === 429) {
-        const retryAfter = response.headers.get('retry-after');
-        const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : attempt * 3000;
-        console.log(`Rate limited (attempt ${attempt}), waiting ${waitMs}ms`);
         if (attempt < maxRetries) {
-          await new Promise((r) => setTimeout(r, waitMs));
+          await new Promise((r) => setTimeout(r, 3000));
           continue;
         }
-        return res.status(429).json({ error: 'Rate limited — please wait a moment and retry' });
+        return res.status(429).json({ error: 'Rate limited' });
       }
 
       if (!response.ok) {
-        const errText = await response.text();
-        console.error(`Groq API error (${response.status}):`, errText);
-        return res.status(502).json({ error: 'AI service unavailable' });
+        return res.status(502).json({ error: 'AI service error' });
       }
 
       const result = await response.json();
       const content = result.choices?.[0]?.message?.content;
 
       if (!content) {
-        console.error('Empty response from Groq:', JSON.stringify(result));
-        return res.status(502).json({ error: 'Empty AI response' });
+        return res.status(502).json({ error: 'Empty response' });
       }
 
-      // Strip markdown fences if present
-      const cleaned = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+      let cleaned = content
+        .replace(/```json\s*/gi, '')
+        .replace(/```\s*/gi, '')
+        .trim();
 
+      // Try to repair truncated JSON
       try {
         const parsed = JSON.parse(cleaned);
         return res.status(200).json(parsed);
-      } catch (parseErr) {
-        console.error('JSON parse failed:', cleaned);
-        return res.status(502).json({ error: 'Invalid AI response format' });
+      } catch {
+        // Attempt repair — close open strings and braces
+        let repaired = cleaned;
+
+        // Count open braces/brackets
+        const openBraces = (repaired.match(/{/g) || []).length;
+        const closeBraces = (repaired.match(/}/g) || []).length;
+        const openBrackets = (repaired.match(/\[/g) || []).length;
+        const closeBrackets = (repaired.match(/]/g) || []).length;
+
+        // If we're inside an unterminated string, close it
+        const lastQuote = repaired.lastIndexOf('"');
+        const afterLastQuote = repaired.slice(lastQuote + 1);
+        if (lastQuote > 0 && !afterLastQuote.includes('"') && afterLastQuote.length < 5) {
+          repaired = repaired.slice(0, lastQuote + 1);
+          // Check if we need a value after a colon
+          const beforeQuote = repaired.slice(0, lastQuote);
+          const lastColon = beforeQuote.lastIndexOf(':');
+          const lastComma = beforeQuote.lastIndexOf(',');
+          if (lastColon > lastComma) {
+            // We're in a key without value, remove the incomplete key-value
+            repaired = repaired.slice(0, lastComma > 0 ? lastComma : lastColon);
+          }
+        }
+
+        // Close brackets and braces
+        for (let i = 0; i < openBrackets - closeBrackets; i++) repaired += ']';
+        for (let i = 0; i < openBraces - closeBraces; i++) repaired += '}';
+
+        try {
+          const parsed = JSON.parse(repaired);
+          return res.status(200).json(parsed);
+        } catch {
+          console.error('JSON repair failed:', cleaned.slice(0, 200));
+          return res.status(500).json({ error: 'Invalid response format' });
+        }
       }
 
     } catch (err) {
-      console.error(`Network error (attempt ${attempt}):`, err.message);
       if (attempt === maxRetries) {
-        return res.status(500).json({ error: 'Analysis failed — network error' });
+        console.error('Network error:', err.message);
+        return res.status(500).json({ error: 'Network error' });
       }
-      await new Promise((r) => setTimeout(r, attempt * 2000));
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 }
