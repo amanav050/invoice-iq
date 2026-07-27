@@ -13,16 +13,18 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing type or data' });
   }
 
-  const systemPrompt = 'You are a GST compliance AI. Return ONLY valid JSON. No markdown. No code fences. Keep all string values under 120 characters.';
-
   let userPrompt;
 
   if (type === 'invoice') {
-    userPrompt = `Check this GST invoice. Invoice:${data.invoiceNumber} Vendor:${data.vendorName} Amt:${data.amount} HSN:${data.hsnCode} Rate:${data.gstRate}% VendorStatus:${data.vendorFilingStatus}
-JSON keys: complianceScore(0-100), hsnValidation{current,correct,isValid,reason}, itcEligibility{status("eligible"/"at-risk"/"blocked"),reason}, taxRateCheck{applied,correct,isValid}, recommendation`;
+    userPrompt = `Analyze this GST invoice. Vendor:${data.vendorName} Amount:₹${data.amount} HSN:${data.hsnCode} AppliedGST:${data.gstRate}% VendorFilingStatus:${data.vendorFilingStatus}.
+Return ONLY this JSON structure, nothing else:
+{"complianceScore":0,"hsnValidation":{"current":"","correct":"","isValid":true,"reason":""},"itcEligibility":{"status":"eligible","reason":""},"taxRateCheck":{"applied":0,"correct":0,"isValid":true},"recommendation":""}
+Fill in real values. complianceScore 0-100. itcEligibility.status must be "eligible","at-risk", or "blocked". Keep all strings under 100 chars.`;
   } else if (type === 'vendor') {
-    userPrompt = `Assess GST vendor risk. Name:${data.name} GSTIN:${data.gstin} Reliability:${data.reliability}/100 Filing:${data.filingStatus} Invoices:${data.invoiceCount} Risk:${data.riskNote}
-JSON keys: riskNarrative, filingPattern, itcExposure(₹ string), prediction, recommendation`;
+    userPrompt = `Assess this GST vendor. Name:${data.name} GSTIN:${data.gstin} Reliability:${data.reliability}/100 FilingStatus:${data.filingStatus} Invoices:${data.invoiceCount} Risk:${data.riskNote}.
+Return ONLY this JSON structure, nothing else:
+{"riskNarrative":"","filingPattern":"","itcExposure":"₹0","prediction":"","recommendation":""}
+Fill in real values. Keep all strings under 100 chars.`;
   } else {
     return res.status(400).json({ error: 'Invalid type' });
   }
@@ -37,13 +39,16 @@ JSON keys: riskNarrative, filingPattern, itcExposure(₹ string), prediction, re
           'Authorization': `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: 'openai/gpt-oss-20b',
+          model: 'qwen/qwen3-32b',
           messages: [
-            { role: 'system', content: systemPrompt },
+            {
+              role: 'system',
+              content: 'You are a GST compliance AI. Return ONLY valid JSON. No thinking. No markdown. No explanation. No code fences. Just the JSON object.',
+            },
             { role: 'user', content: userPrompt },
           ],
           max_tokens: 1024,
-          temperature: 0.2,
+          temperature: 0.1,
         }),
       });
 
@@ -56,6 +61,8 @@ JSON keys: riskNarrative, filingPattern, itcExposure(₹ string), prediction, re
       }
 
       if (!response.ok) {
+        const errText = await response.text();
+        console.error('Groq error:', response.status, errText);
         return res.status(502).json({ error: 'AI service error' });
       }
 
@@ -63,59 +70,32 @@ JSON keys: riskNarrative, filingPattern, itcExposure(₹ string), prediction, re
       const content = result.choices?.[0]?.message?.content;
 
       if (!content) {
+        console.error('Empty response:', JSON.stringify(result).slice(0, 300));
         return res.status(502).json({ error: 'Empty response' });
       }
 
-      let cleaned = content
-        .replace(/```json\s*/gi, '')
-        .replace(/```\s*/gi, '')
-        .trim();
+      // Extract JSON — find first { and last }
+      const firstBrace = content.indexOf('{');
+      const lastBrace = content.lastIndexOf('}');
 
-      // Try to repair truncated JSON
+      if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
+        console.error('No JSON found:', content.slice(0, 200));
+        return res.status(500).json({ error: 'No JSON in response' });
+      }
+
+      const jsonStr = content.slice(firstBrace, lastBrace + 1);
+
       try {
-        const parsed = JSON.parse(cleaned);
+        const parsed = JSON.parse(jsonStr);
         return res.status(200).json(parsed);
-      } catch {
-        // Attempt repair — close open strings and braces
-        let repaired = cleaned;
-
-        // Count open braces/brackets
-        const openBraces = (repaired.match(/{/g) || []).length;
-        const closeBraces = (repaired.match(/}/g) || []).length;
-        const openBrackets = (repaired.match(/\[/g) || []).length;
-        const closeBrackets = (repaired.match(/]/g) || []).length;
-
-        // If we're inside an unterminated string, close it
-        const lastQuote = repaired.lastIndexOf('"');
-        const afterLastQuote = repaired.slice(lastQuote + 1);
-        if (lastQuote > 0 && !afterLastQuote.includes('"') && afterLastQuote.length < 5) {
-          repaired = repaired.slice(0, lastQuote + 1);
-          // Check if we need a value after a colon
-          const beforeQuote = repaired.slice(0, lastQuote);
-          const lastColon = beforeQuote.lastIndexOf(':');
-          const lastComma = beforeQuote.lastIndexOf(',');
-          if (lastColon > lastComma) {
-            // We're in a key without value, remove the incomplete key-value
-            repaired = repaired.slice(0, lastComma > 0 ? lastComma : lastColon);
-          }
-        }
-
-        // Close brackets and braces
-        for (let i = 0; i < openBrackets - closeBrackets; i++) repaired += ']';
-        for (let i = 0; i < openBraces - closeBraces; i++) repaired += '}';
-
-        try {
-          const parsed = JSON.parse(repaired);
-          return res.status(200).json(parsed);
-        } catch {
-          console.error('JSON repair failed:', cleaned.slice(0, 200));
-          return res.status(500).json({ error: 'Invalid response format' });
-        }
+      } catch (e) {
+        console.error('JSON parse failed:', jsonStr.slice(0, 200));
+        return res.status(500).json({ error: 'Invalid JSON' });
       }
 
     } catch (err) {
+      console.error('Network error:', err.message);
       if (attempt === maxRetries) {
-        console.error('Network error:', err.message);
         return res.status(500).json({ error: 'Network error' });
       }
       await new Promise((r) => setTimeout(r, 2000));
