@@ -5,8 +5,21 @@ import ScoreBar from './ScoreBar'
 import SummaryBar from './SummaryBar'
 import VendorDetail from './VendorDetail'
 
+function autoReliability(filingStatus) {
+  if (filingStatus === 'Defaulter') return Math.floor(Math.random() * 16) + 15
+  if (filingStatus === 'Irregular') return Math.floor(Math.random() * 21) + 45
+  return Math.floor(Math.random() * 11) + 85
+}
+
+function getRiskLevel(reliability, filingStatus) {
+  if (filingStatus === 'Defaulter') return 'Critical'
+  if (reliability < 40) return 'High'
+  if (reliability < 70 || filingStatus === 'Irregular') return 'Medium'
+  return 'Low'
+}
+
 function generateVendorFallback(data) {
-  const reliability = parseInt(data.reliability) || 50
+  const reliability = data.reliability
   const invoiceCount = parseInt(data.invoiceCount) || 1
   const filingStatus = data.filingStatus
   const exposureAmt = invoiceCount * 50000
@@ -14,20 +27,20 @@ function generateVendorFallback(data) {
   let riskNarrative, filingPattern, prediction, recommendation
 
   if (filingStatus === 'Defaulter') {
-    riskNarrative = data.name + ' represents critical compliance risk. No recent GSTR-1 filings detected. ITC claims against this vendor face near-certain reversal under Section 16(2)(c). Immediate action required.'
-    filingPattern = 'Multiple consecutive GSTR-1 filings missed. GSTIN may be at risk of suo moto cancellation by tax authority.'
-    prediction = 'Near-certain ITC denial for all pending and future invoices. Historical claims may also face review.'
-    recommendation = 'Immediately cease all transactions. File proactive ITC reversal to avoid interest and penalty. Source alternative vendor with Regular filing status.'
+    riskNarrative = data.name + ' represents critical compliance risk. No recent GSTR-1 filings detected, indicating prolonged non-compliance. ITC claims against this vendor face near-certain reversal under Section 16(2)(c). Reliability score of ' + reliability + '/100 confirms systemic failure in tax compliance obligations.'
+    filingPattern = 'Multiple consecutive GSTR-1 filings missed. GSTIN may be at risk of suo moto cancellation by tax authority under Section 29(2).'
+    prediction = 'Near-certain ITC denial for all pending and future invoices. Historical claims from past 12 months may also face review and potential reversal.'
+    recommendation = 'Immediately cease all transactions with ' + data.name + '. File proactive ITC reversal on ' + invoiceCount + ' pending invoices to avoid interest and penalty. Source alternative vendor with Regular filing status.'
   } else if (filingStatus === 'Irregular') {
-    riskNarrative = data.name + ' shows moderate compliance risk with inconsistent GST filing behavior. Late or missed filings indicate operational strain that could escalate to non-compliance.'
-    filingPattern = 'Intermittent late filings detected in recent months. Pattern suggests end-of-quarter pressure on compliance processes.'
-    prediction = 'Moderate probability of escalation. May transition to Defaulter status within 2-3 months if pattern continues.'
-    recommendation = 'Place on watchlist with monthly compliance reviews. Request GSTR-3B acknowledgment before processing large invoices. Establish backup vendor.'
+    riskNarrative = data.name + ' shows moderate compliance risk with inconsistent GST filing behavior. Reliability score of ' + reliability + '/100 reflects a pattern of late or missed filings that could escalate. Currently ' + invoiceCount + ' invoices are linked to this vendor in your purchase register.'
+    filingPattern = 'Intermittent late GSTR-1 filings detected in recent months. Pattern suggests operational or financial strain affecting compliance processes.'
+    prediction = 'Moderate probability of escalation to Defaulter status within 2-3 months if filing pattern continues. ITC claims may face scrutiny during GSTR-2B reconciliation.'
+    recommendation = 'Place ' + data.name + ' on active watchlist with monthly compliance reviews. Request copies of filed GSTR-1 before processing invoices exceeding ₹2,00,000. Identify backup vendor as contingency.'
   } else {
-    riskNarrative = data.name + ' is a low-risk vendor with consistent GST compliance. Filing record shows regular and timely submissions. No immediate concerns detected.'
-    filingPattern = 'GSTR-1 and GSTR-3B returns filed consistently on or before due dates. No late filings in recent history.'
-    prediction = 'Minimal risk of compliance issues. Vendor demonstrates strong financial governance and systematic tax processes.'
-    recommendation = 'Maintain current transaction levels. Standard quarterly monitoring sufficient. Consider for preferred vendor status.'
+    riskNarrative = data.name + ' is a low-risk vendor with consistent GST compliance. Reliability score of ' + reliability + '/100 reflects timely and regular filing behavior. ' + invoiceCount + ' invoices linked to this vendor show no compliance concerns.'
+    filingPattern = 'GSTR-1 and GSTR-3B returns filed consistently on or before due dates. No late filings detected in recent filing history.'
+    prediction = 'Minimal risk of compliance issues. Vendor demonstrates strong financial governance and systematic tax compliance processes.'
+    recommendation = 'Maintain current transaction levels with ' + data.name + '. Standard quarterly monitoring is sufficient. Consider for preferred vendor status in procurement policy.'
   }
 
   return {
@@ -47,7 +60,7 @@ export default function VendorRadar({ showToast }) {
   const [scanning, setScanning] = useState(false)
 
   const [form, setForm] = useState({
-    name: '', gstin: '', reliability: '50', filingStatus: 'Regular', invoiceCount: '1', riskNote: '',
+    name: '', gstin: '', filingStatus: 'Regular', invoiceCount: '1',
   })
 
   const selected = vendors.find((v) => v.id === selectedId)
@@ -64,13 +77,6 @@ export default function VendorRadar({ showToast }) {
     setForm((p) => ({ ...p, [key]: value }))
   }
 
-  function getRiskLevel(reliability, filingStatus) {
-    if (filingStatus === 'Defaulter') return 'Critical'
-    if (reliability < 40) return 'High'
-    if (reliability < 70 || filingStatus === 'Irregular') return 'Medium'
-    return 'Low'
-  }
-
   async function handleScanVendor(e) {
     e.preventDefault()
     if (!form.name) return
@@ -78,10 +84,10 @@ export default function VendorRadar({ showToast }) {
     setScanning(true)
 
     const vendorId = 'V-' + Date.now().toString().slice(-6)
-    const reliability = parseInt(form.reliability) || 50
+    const reliability = autoReliability(form.filingStatus)
     const invoiceCount = parseInt(form.invoiceCount) || 1
     const riskLevel = getRiskLevel(reliability, form.filingStatus)
-    const riskNote = form.riskNote || (form.filingStatus === 'Defaulter' ? 'No recent GSTR-1 filings' : form.filingStatus === 'Irregular' ? 'Late filings detected' : 'Consistent filer')
+    const riskNote = form.filingStatus === 'Defaulter' ? 'No recent GSTR-1 filings' : form.filingStatus === 'Irregular' ? 'Late filings detected in recent months' : 'Consistent filer, no issues'
 
     const newVendor = {
       id: vendorId, name: form.name,
@@ -129,7 +135,7 @@ export default function VendorRadar({ showToast }) {
     showToast('Vendor assessed successfully')
     setLoading(false)
     setScanning(false)
-    setForm({ name: '', gstin: '', reliability: '50', filingStatus: 'Regular', invoiceCount: '1', riskNote: '' })
+    setForm({ name: '', gstin: '', filingStatus: 'Regular', invoiceCount: '1' })
   }
 
   async function handleSelect(id) {
@@ -169,7 +175,6 @@ export default function VendorRadar({ showToast }) {
     <div className="pt-6">
       <SummaryBar items={summaryItems} />
 
-      {/* Scan Vendor Form */}
       <div className="card mb-4 overflow-hidden">
         <button onClick={() => setShowForm(!showForm)}
           className="w-full px-5 py-4 flex items-center justify-between hover:bg-white/[0.01] transition-colors">
@@ -192,7 +197,7 @@ export default function VendorRadar({ showToast }) {
 
         {showForm && (
           <form onSubmit={handleScanVendor} className="px-5 pb-5 pt-1 border-t border-white/[0.04] animate-[fadeIn_0.2s_ease-out]">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
               <div>
                 <label className="label block mb-1.5">Vendor name</label>
                 <input type="text" value={form.name} onChange={(e) => updateForm('name', e.target.value)}
@@ -215,27 +220,18 @@ export default function VendorRadar({ showToast }) {
                 </select>
               </div>
               <div>
-                <label className="label block mb-1.5">Reliability score (0-100)</label>
-                <input type="number" value={form.reliability} onChange={(e) => updateForm('reliability', e.target.value)}
-                  min="0" max="100" placeholder="0-100"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all" />
-              </div>
-              <div>
                 <label className="label block mb-1.5">Invoices with you</label>
-                <input type="number" value={form.invoiceCount} onChange={(e) => updateForm('invoiceCount', e.target.value)}
-                  min="1" placeholder="Number of invoices"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all" />
-              </div>
-              <div className="flex items-end">
-                <button type="submit" disabled={!form.name || scanning}
-                  className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-accent to-accent-light text-white hover:shadow-lg hover:shadow-accent/20">
-                  {scanning ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Assessing...
-                    </span>
-                  ) : 'Assess Risk'}
-                </button>
+                <div className="flex gap-2">
+                  <input type="number" value={form.invoiceCount} onChange={(e) => updateForm('invoiceCount', e.target.value)}
+                    min="1" placeholder="Count"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] text-text placeholder-muted text-sm focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/10 transition-all" />
+                  <button type="submit" disabled={!form.name || scanning}
+                    className="shrink-0 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-300 disabled:opacity-30 disabled:cursor-not-allowed bg-gradient-to-r from-accent to-accent-light text-white hover:shadow-lg hover:shadow-accent/20">
+                    {scanning ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : 'Assess'}
+                  </button>
+                </div>
               </div>
             </div>
           </form>
